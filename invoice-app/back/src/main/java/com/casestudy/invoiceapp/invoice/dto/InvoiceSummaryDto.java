@@ -17,6 +17,7 @@ public class InvoiceSummaryDto {
     public final String invoiceNumber;
     public final String supplier;
     public final String purchaseRequestNumber;
+    public final Instant purchaseRequestValidatedAt;
     public final BigDecimal invoiceSum;
     public final BigDecimal invoiceSumPaid;
     public final String invoiceStatus;
@@ -29,6 +30,7 @@ public class InvoiceSummaryDto {
                              String invoiceNumber,
                              String supplier,
                              String purchaseRequestNumber,
+                             Instant purchaseRequestValidatedAt,
                              BigDecimal invoiceSum,
                              BigDecimal invoiceSumPaid,
                              String invoiceStatus,
@@ -40,6 +42,7 @@ public class InvoiceSummaryDto {
         this.invoiceNumber = invoiceNumber;
         this.supplier = supplier;
         this.purchaseRequestNumber = purchaseRequestNumber;
+        this.purchaseRequestValidatedAt = purchaseRequestValidatedAt;
         this.invoiceSum = invoiceSum;
         this.invoiceSumPaid = invoiceSumPaid;
         this.invoiceStatus = invoiceStatus;

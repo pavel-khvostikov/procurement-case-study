@@ -1,12 +1,13 @@
-"""Password hashing + opaque-token session helpers.
+"""Browser-session and service-integration authentication helpers.
 
-This is deliberately simple: no JWT, no refresh, cookie token persisted in the
-DB. Good for a case study, bad for production."""
+Browser auth is deliberately simple: no JWT, no refresh, and cookie tokens are
+persisted in the database. Good for a case study, bad for production."""
 from __future__ import annotations
 
+import os
 import secrets
 
-from fastapi import Cookie, Depends, HTTPException, Response, status
+from fastapi import Cookie, Depends, Header, HTTPException, Response, status
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from .models import User
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 COOKIE_NAME = "pr_token"
+INTEGRATION_TOKEN_HEADER = "X-Integration-Token"
 
 
 def hash_password(plain: str) -> str:
@@ -71,3 +73,27 @@ def require_role(*allowed: str):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires role: {', '.join(allowed)}")
         return user
     return _inner
+
+
+def require_integration_token(
+    supplied_token: str | None = Header(
+        default=None,
+        alias=INTEGRATION_TOKEN_HEADER,
+    ),
+) -> None:
+    """Authenticate backend-to-backend requests and fail closed."""
+    configured_token = os.environ.get("PR_INTEGRATION_TOKEN")
+    invalid = (
+        not configured_token
+        or configured_token.isspace()
+        or not supplied_token
+        or supplied_token.isspace()
+    )
+    if invalid or not secrets.compare_digest(
+        supplied_token.encode("utf-8"),
+        configured_token.encode("utf-8"),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid integration token",
+        )

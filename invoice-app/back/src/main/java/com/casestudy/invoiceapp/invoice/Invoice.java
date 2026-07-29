@@ -19,12 +19,15 @@ public class Invoice {
     private String supplier;
 
     /**
-     * Free-text purchase request code (e.g. "PR-2"). There is no foreign key
-     * back to the PR app's purchase_requests table — that's one of the rough
-     * edges candidates are expected to call out.
+     * External purchase request code (e.g. "PR-2"). A non-null
+     * {@code purchaseRequestValidatedAt} marks this as a validated logical
+     * relationship; a code without provenance is legacy, unverified text.
      */
     @Column(name = "purchase_request_number")
     private String purchaseRequestNumber;
+
+    @Column(name = "purchase_request_validated_at")
+    private Instant purchaseRequestValidatedAt;
 
     @Column(name = "invoice_sum", precision = 14, scale = 2, nullable = false)
     private BigDecimal invoiceSum = BigDecimal.ZERO;
@@ -32,7 +35,7 @@ public class Invoice {
     @Column(name = "invoice_sum_paid", precision = 14, scale = 2, nullable = false)
     private BigDecimal invoiceSumPaid = BigDecimal.ZERO;
 
-    /** 'created' | 'prepaid' | 'paid'. Validated in the controller. */
+    /** 'created' | 'prepaid' | 'paid'. Validated by {@link InvoiceService}. */
     @Column(name = "invoice_status", nullable = false)
     private String invoiceStatus = "created";
 
@@ -75,6 +78,11 @@ public class Invoice {
 
     public String getPurchaseRequestNumber() { return purchaseRequestNumber; }
     public void setPurchaseRequestNumber(String purchaseRequestNumber) { this.purchaseRequestNumber = purchaseRequestNumber; }
+
+    public Instant getPurchaseRequestValidatedAt() { return purchaseRequestValidatedAt; }
+    public void setPurchaseRequestValidatedAt(Instant purchaseRequestValidatedAt) {
+        this.purchaseRequestValidatedAt = purchaseRequestValidatedAt;
+    }
 
     public BigDecimal getInvoiceSum() { return invoiceSum; }
     public void setInvoiceSum(BigDecimal invoiceSum) { this.invoiceSum = invoiceSum; }
