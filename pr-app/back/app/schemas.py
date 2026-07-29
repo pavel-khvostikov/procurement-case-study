@@ -54,6 +54,7 @@ class PurchaseRequestOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    author_id: int | None
     request_author: str
     request_name: str
     request_code: str
@@ -75,3 +76,13 @@ class PurchaseRequestReferenceOut(BaseModel):
     request_author: str
     supplier_name: str
     request_approval_status: PRStatus
+
+
+class InvoiceStatusOut(BaseModel):
+    """Minimal invoice status contract used by the PR application."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: int = Field(gt=0)
+    invoice_number: str
+    invoice_status: Literal["created", "prepaid", "paid"]

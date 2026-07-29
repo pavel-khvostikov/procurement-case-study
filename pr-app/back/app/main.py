@@ -7,9 +7,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from .invoice_client import InvoiceIntegrationError
 from .routers import auth, integration, purchase_requests, users
 
 
@@ -40,6 +42,17 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(purchase_requests.router)
 app.include_router(integration.router)
+
+
+@app.exception_handler(InvoiceIntegrationError)
+def invoice_integration_error_handler(
+    _: Request,
+    exc: InvoiceIntegrationError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.code, "message": exc.message},
+    )
 
 
 @app.get("/health", tags=["meta"])

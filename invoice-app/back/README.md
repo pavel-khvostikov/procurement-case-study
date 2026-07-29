@@ -25,6 +25,7 @@ cd invoice-app/back
 # requires JDK 17 and Maven 3.9+
 export PR_API_BASE_URL=http://localhost:8001
 export PR_INTEGRATION_TOKEN=<same-token-configured-on-pr-backend>
+export INVOICE_INTEGRATION_TOKEN=<same-reverse-token-configured-on-pr-backend>
 mvn spring-boot:run
 ```
 
@@ -36,9 +37,16 @@ or changing a PR relationship. It is a backend credential and must never be
 exposed through a `VITE_*` variable. Calls use finite connection and response
 timeouts and have no retries or cache.
 
+`INVOICE_INTEGRATION_TOKEN` defaults to blank and protects the minimal reverse
+status endpoint. Configure the same value in the PR backend; it is a separate
+backend-only credential from `PR_INTEGRATION_TOKEN`.
+
 ## Endpoints
 
-All routes except `/auth/login` and `/auth/logout` require an `invoice_token` cookie issued by `/auth/login`. The cookie's user must additionally have `role = finance` for any `/invoice` route.
+Browser routes except `/auth/login` and `/auth/logout` require an
+`invoice_token` cookie issued by `/auth/login`. The cookie's user must
+additionally have `role = finance` for any `/invoice` route. The service-facing
+integration endpoint uses only `X-Integration-Token`.
 
 | Method | Path | Body | Notes |
 | --- | --- | --- | --- |
@@ -51,6 +59,7 @@ All routes except `/auth/login` and `/auth/logout` require an `invoice_token` co
 | `POST` | `/invoice` | `multipart/form-data` | Create. Fields: `invoice_number`, `supplier`, required `purchase_request_number`, `invoice_sum`, `invoice_sum_paid`, `invoice_status`, `attachment` (file, optional). Paid amount may be omitted only for `created`, where it defaults to zero. |
 | `PUT`  | `/invoice/{id}` | JSON | Partial update. An omitted PR preserves it; a changed code or explicit legacy reconciliation validates it. Null/blank cannot clear it. |
 | `GET`  | `/invoice/{id}/attachment` | — | Streams the PDF. 404 if no file attached. |
+| `GET` | `/integration/invoices?purchase_request_number=PR-2` | — | Token-protected minimal status list for validated links. |
 
 Invoice responses include `purchase_request_validated_at`. A PR code with a
 timestamp is a trusted relationship; a code without one is legacy/unverified;
@@ -96,7 +105,11 @@ src/main/java/com/casestudy/invoiceapp/
 │   ├── InvoiceController.java # user API + download endpoint
 │   └── dto/
 │       ├── InvoiceSummaryDto.java
+│       ├── InvoiceIntegrationDto.java
 │       └── InvoiceUpdateDto.java
+├── integration/
+│   ├── InvoiceIntegrationController.java
+│   └── InvoiceIntegrationTokenAuthenticator.java
 └── purchaserequest/
     ├── PurchaseRequestClient.java
     ├── PurchaseRequestReference.java
@@ -112,5 +125,10 @@ This app and the PR backend still own separate domain data:
 1. Invoice stores only the PR's canonical `request_code` and validation provenance; it does not read PR tables or copy PR details.
 2. The browser calls this backend, which sends `X-Integration-Token` to the PR backend.
 3. Both applications still connect to the same Postgres instance and read the shared `users` table as a starter-code constraint.
+
+The reverse endpoint queries only exact validated references and returns
+`id`, `invoice_number`, and `invoice_status` in descending ID order. It never
+calls the PR backend and never exposes amounts, suppliers, attachments, or
+relationship provenance.
 
 Sessions remain intentionally separate; signing in to one application does not sign in to the other.

@@ -7,9 +7,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..invoice_client import fetch_invoice_statuses
 from ..models import PurchaseRequest, User
 from ..pdf import render_pr_pdf
 from ..schemas import (
+    InvoiceStatusOut,
     PRStatus,
     PurchaseRequestCreate,
     PurchaseRequestOut,
@@ -118,6 +120,27 @@ def update_pr(
     db.commit()
     db.refresh(pr)
     return pr
+
+
+@router.get("/{pr_id}/invoices", response_model=list[InvoiceStatusOut])
+def list_purchase_request_invoices(
+    pr_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+) -> list[InvoiceStatusOut]:
+    pr = db.get(PurchaseRequest, pr_id)
+    if not pr:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+    if user.role != "finance" and (
+        pr.author_id is None or pr.author_id != user.id
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the request owner or finance can view invoices",
+        )
+
+    return fetch_invoice_statuses(pr.request_code)
 
 
 @router.get("/{pr_id}/pdf")

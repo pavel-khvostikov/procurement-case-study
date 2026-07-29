@@ -4,7 +4,7 @@ Vite + React 19 + Mantine 8 + Axios. Everything else is on purpose absent — no
 
 ## Run with docker compose
 
-From the repo root, after uncommenting the `pr-app-front` service block:
+From the repo root:
 
 ```bash
 docker compose up --build pr-app-front
@@ -35,6 +35,7 @@ src/
     ├── PRList.jsx        # main screen: header + table + search
     ├── CreatePRModal.jsx # "Create New Purchase Request" form
     ├── ViewPRModal.jsx   # role-aware view modal
+    ├── InvoiceStatusPanel.jsx # degradable requester/finance status view
     └── StatusBadge.jsx   # status → Mantine Badge color
 ```
 
@@ -52,3 +53,13 @@ The view modal renders different action buttons based on the current user and th
 `PDF` is always available — it just hits `/purchase-request/{id}/pdf`.
 
 The backend re-checks every transition (`_can_transition` in `routers/purchase_requests.py`); the frontend gating is just to avoid showing buttons that would fail.
+
+## Invoice-status panel
+
+The PR detail modal shows recorded invoice statuses to finance and to the
+request owner identified by stable `author_id`. It loads through the PR backend,
+never contacts Invoice directly, and handles loading, no linked invoices, and a
+retryable dependency failure independently from the rest of the modal.
+
+The panel deliberately shows only invoice number and status. It does not expose
+amounts or claim that the purchase request as a whole is fully paid.
