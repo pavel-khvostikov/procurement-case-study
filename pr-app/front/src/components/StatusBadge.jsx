@@ -8,6 +8,9 @@ const STATUS_COLOR = {
   'sent for approval': 'yellow',
   approved: 'teal',
   rejected: 'red',
+  created: 'gray',
+  prepaid: 'yellow',
+  paid: 'teal',
 };
 
 export default function StatusBadge({ status }) {

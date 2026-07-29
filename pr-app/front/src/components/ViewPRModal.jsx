@@ -10,6 +10,7 @@ import {
 } from '@mantine/core';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
+import InvoiceStatusPanel from './InvoiceStatusPanel.jsx';
 import StatusBadge from './StatusBadge.jsx';
 
 const FieldRow = ({ label, value }) => (
@@ -36,6 +37,8 @@ export default function ViewPRModal({ pr, onClose, onUpdated }) {
   // Once approved or rejected, no more transitions.
   const isAuthor = user?.username === pr.request_author;
   const isFinance = user?.role === 'finance';
+  const canViewInvoices =
+    isFinance || (pr.author_id != null && user?.id === pr.author_id);
   const status = pr.request_approval_status;
 
   const canSendForApproval = isAuthor && status === 'initiated';
@@ -103,6 +106,13 @@ export default function ViewPRModal({ pr, onClose, onUpdated }) {
           <FieldRow label="Supplier email" value={pr.supplier_email} />
         </SimpleGrid>
         <FieldRow label="Request details" value={pr.request_details} />
+
+        {canViewInvoices && (
+          <>
+            <Divider />
+            <InvoiceStatusPanel purchaseRequestId={pr.id} />
+          </>
+        )}
 
         {note && (
           <Stack bg="gray.0" p="sm" gap={2} style={{ borderRadius: 4 }}>

@@ -1,5 +1,6 @@
 package com.casestudy.invoiceapp.invoice;
 
+import com.casestudy.invoiceapp.invoice.dto.InvoiceIntegrationDto;
 import com.casestudy.invoiceapp.invoice.dto.InvoiceSummaryDto;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -41,4 +42,21 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
         order by i.id desc
     """)
     List<InvoiceSummaryDto> findValidatedSummariesByPurchaseRequestNumber(String purchaseRequestNumber);
+
+    /**
+     * Service-facing relationship query. Keep this projection deliberately
+     * narrower than the finance-facing summary.
+     */
+    @Query("""
+        select new com.casestudy.invoiceapp.invoice.dto.InvoiceIntegrationDto(
+            i.id, i.invoiceNumber, i.invoiceStatus
+        )
+        from Invoice i
+        where i.purchaseRequestNumber = :purchaseRequestNumber
+          and i.purchaseRequestValidatedAt is not null
+        order by i.id desc
+    """)
+    List<InvoiceIntegrationDto> findIntegrationInvoicesByPurchaseRequestNumber(
+            String purchaseRequestNumber
+    );
 }

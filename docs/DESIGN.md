@@ -14,7 +14,7 @@ PR 2 demonstrates that:
 4. Invalid and legacy references never appear as trusted relationships.
 5. Existing invoice data remains readable if the PR application is unavailable.
 
-In planned PR 3, the PR application will optionally show PR authors and finance a read-only list of linked invoice statuses. It will not infer that a PR is fully paid because PRs have no amount or currency and further invoices may arrive.
+PR 3 adds a read-only list of linked invoice statuses for the PR author and finance. It does not infer that a PR is fully paid because PRs have no amount or currency and further invoices may arrive.
 
 The prototype establishes the smallest reliable boundary for this handoff while leaving room for the incoming ERP and Purchase Orders.
 
@@ -52,7 +52,7 @@ These production questions do not block the prototype:
 - Which ERP or legal-entity identifier should define supplier identity?
 - What amount, currency, tax, tolerance, credit-note, and partial-payment rules define reconciliation?
 
-Manual tests exposed a starter defect: an invoice could be saved as `paid` with zero paid, disappearing from Outstanding while contributing nothing to Paid this month. A narrow fix in this branch validates positive, cent-exact totals and consistent zero/partial/full states on create and updates that submit amount/status fields. Selecting `paid` copies the invoice total; selecting `created` resets paid to zero; backend validation remains authoritative. Outstanding is now derived from amounts. Existing contradictory rows are not backfilled, and unrelated updates that omit payment fields remain available.
+Manual tests exposed a starter defect: an invoice could be saved as `paid` with zero paid, disappearing from Outstanding while contributing nothing to Paid this month. A narrow PR 2 fix validates positive, cent-exact totals and consistent zero/partial/full states on create and updates that submit amount/status fields. Selecting `paid` copies the invoice total; selecting `created` resets paid to zero; backend validation remains authoritative. Outstanding is now derived from amounts. Existing contradictory rows are not backfilled, and unrelated updates that omit payment fields remain available.
 
 “Paid this month” still uses generic `updated_at`, so an unrelated edit can make an old payment appear current and partial payments cannot be assigned reliably to a month. Accurate payment dates, installments, reversals, and actors require a payment timestamp or ledger and remain roadmap work.
 
@@ -60,26 +60,26 @@ Other baseline issues outside this integration are concurrency-unsafe PR-code ge
 
 ## Proposed design
 
-PR 2 changes the PR backend, Invoice backend, and Invoice frontend. The optional PR 3 status extension also changes the PR frontend. No third service or technology replacement is needed.
+PR 2 changes the PR backend, Invoice backend, and Invoice frontend. PR 3 adds the narrow reverse contract and PR status panel. No third service or technology replacement is needed.
 
 - The Invoice backend retrieves candidates and validates selections synchronously through a narrow PR API.
 - A single Invoice service enforces the relationship invariant for create and edit; controllers cannot bypass it.
 - The Invoice frontend calls only its own backend; service credentials never reach the browser.
 - Invoice stores the canonical PR code and validation provenance; relationship reads use local data, not the PR API.
-- The optional PR status panel uses a separate read-only call from PR to Invoice and degrades independently.
+- The PR status panel uses a separate read-only call from PR to Invoice and degrades independently.
 
 Neither backend reads the other's domain tables. The existing shared `users` table remains a baseline coupling and is not expanded.
 
-The existing stack and Docker Compose topology remain. Spring uses its existing `RestClient`; PR 3 will move `httpx` to runtime dependencies for the optional PR outbound call.
+The existing stack and Docker Compose topology remain. Spring uses its existing `RestClient`; the PR backend uses `httpx` for its outbound call.
 
 Configuration is backend-only:
 
 | Consumer | Configuration |
 |---|---|
 | Invoice backend calling PR | `PR_API_BASE_URL`, `PR_INTEGRATION_TOKEN` |
-| PR backend calling Invoice (planned PR 3) | `INVOICE_API_BASE_URL`, `INVOICE_INTEGRATION_TOKEN` |
+| PR backend calling Invoice | `INVOICE_API_BASE_URL`, `INVOICE_INTEGRATION_TOKEN` |
 
-Docker uses `http://pr-app-back:8001`; host execution uses `http://localhost:8001`. The Invoice client has finite connection and response timeouts. The planned PR 3 client will follow the same rule. Invoice-to-PR calls happen at request time, so Compose needs no circular startup dependency.
+Docker service URLs are `http://pr-app-back:8001` and `http://invoice-app-back:8002`; host execution uses `localhost` with the same ports. Both clients have finite connection and response timeouts. Calls happen at request time, so Compose needs no circular startup dependency.
 
 ## Domain model and ownership
 
@@ -89,7 +89,7 @@ Docker uses `http://pr-app-back:8001`; host execution uses `http://localhost:800
 | Invoice number, supplier, amounts, status, attachment | Invoice | Remains Invoice-owned. |
 | Invoice-to-PR association | Invoice | Stores PR's canonical `request_code`. |
 | Association provenance | Invoice | Nullable `purchase_request_validated_at`; non-null means validated through the PR API. |
-| Requester-visible invoice status (planned PR 3) | Invoice | Will be returned on demand, not copied into PR storage. |
+| Requester-visible invoice status | Invoice | Returned on demand, not copied into PR storage. |
 
 One PR has zero or many invoices; every new invoice has one PR.
 
@@ -106,7 +106,7 @@ purchase_request_validated_at = <validation timestamp>
 | Code without validation timestamp | Legacy/unverified text. |
 | Neither value | Legacy/unlinked invoice. |
 
-New invoices cannot enter the latter two states. PR 2 relationship queries and the planned PR 3 status panel use only validated rows, so a matching legacy string is not silently promoted.
+New invoices cannot enter the latter two states. Relationship queries and the PR status panel use only validated rows, so a matching legacy string is not silently promoted.
 
 The relationship provides logical referential integrity without a cross-application foreign key or PR snapshot. Storing the code keeps reads available during an outage and avoids synchronizing copied fields. The invoice supplier remains independent: selection prefills it, but finance may accept a mismatch warning and retain another value.
 
@@ -159,7 +159,7 @@ Existing Invoice cookie authentication and finance authorization still apply.
 
 Responses include `purchase_request_validated_at` so the UI can distinguish validated, legacy/unverified, and unlinked records.
 
-### Optional invoice-status API (planned PR 3)
+### Invoice-status API
 
 Requests from the PR backend require `X-Integration-Token: <INVOICE_INTEGRATION_TOKEN>`.
 
@@ -187,7 +187,7 @@ The PR backend resolves `pr_id` to its canonical code, so callers cannot query a
 - If candidates fail to load, the current relationship remains visible and unrelated fields remain editable, but the selector is disabled.
 - Failed validation leaves the submitted invoice unchanged.
 
-### Requester-visible status (planned PR 3)
+### Requester-visible status
 
 For an authorized user, the PR backend fetches minimal invoice summaries by canonical code. The UI shows each recorded status (`created`, `prepaid`, or `paid`) without inferring balance, overall payment completion, or future invoices.
 
@@ -212,9 +212,10 @@ Purchase-request integration errors return a stable machine-readable `code` and 
 | Supplier values differ | Show both values and warn; allow the save. |
 | Existing free-text reference | Mark it legacy/unverified and exclude it from relationship views until reconciled. |
 | PR service unavailable during invoice reads | Serve existing invoices and validated relationships from local data. |
-| Invoice service unavailable in the PR view (planned PR 3) | Show “Invoice information temporarily unavailable”; the rest of the PR remains usable. |
-| No linked invoices in the PR view (planned PR 3) | Show “No linked invoices yet,” not an error or paid state. |
-| Another employee requests the status panel (planned PR 3) | `403`; only finance and the stable `author_id` owner are allowed. |
+| Invoice timeout, connection failure, or `5xx` in the PR view | `503 INVOICE_SERVICE_UNAVAILABLE`; keep the rest of the PR usable. |
+| Invoice authentication, unexpected response, or malformed contract | `502 INVOICE_SERVICE_ERROR` without upstream details. |
+| No linked invoices in the PR view | Show “No linked invoices yet,” not an error or paid state. |
+| Another employee requests the status panel | `403`; only finance and the stable `author_id` owner are allowed. |
 | One PR has several invoices | Return each validated invoice as a separate row. |
 | One invoice needs several PRs | Unsupported; never flatten multiple codes into text. |
 
@@ -233,7 +234,7 @@ Integration endpoints reject missing or invalid tokens. Tokens never appear in `
 | One-to-many filtering is wrong | Return two validated invoices for one PR while excluding another PR and a matching legacy string. |
 | Integration failures are ambiguous | Map timeouts, upstream `5xx`, authentication failures, and malformed payloads to controlled errors. |
 | Payment state is contradictory | Accept consistent zero/partial/full states; reject invalid creates and updates that submit amount/status fields before PR lookup or mutation; keep unrelated legacy edits available. |
-| Optional PR 3 status leaks invoice data (future) | Require the token; omit amounts and attachments; permit author/finance only; distinguish empty from unavailable. |
+| PR status panel leaks invoice data | Require the token; omit amounts and attachments; permit author/finance only; distinguish empty from unavailable. |
 
 FastAPI tests use `pytest`, `TestClient`, dependency overrides, and an isolated database. Spring tests use `MockMvc`, JPA tests, and a mocked HTTP boundary. Backend invariants are automated; the small UI paths use the demonstration below rather than a new frontend test framework.
 
@@ -262,6 +263,24 @@ The running stack passed this scenario:
 6. After restart, candidate loading and validated invoice creation recovered.
 7. A `paid` create without a paid amount returned `400` and left the invoice count unchanged.
 
+### PR 3 verification
+
+Verified on 2026-07-29:
+
+| Check | Result |
+|---|---|
+| `git diff --check` | Passed. |
+| `(cd pr-app/back && uv sync && uv run pytest)` | Host `uv` was unavailable. From `pr-app/back`, `docker run --rm --mount type=bind,src="$PWD/tests",dst=/app/tests procurement-case-study-pr-app-back uv run pytest -q` passed 39 tests in 2.23s, with one Passlib `crypt` deprecation warning. `uv lock --check` resolved 44 packages. |
+| `(cd invoice-app/back && mvn test)` | Host Maven was unavailable. From `invoice-app/back`, `docker run --rm -v "$PWD:/build" -w /build maven:3.9-eclipse-temurin-17 mvn test` passed all 43 tests with no failures, errors, or skips. |
+| `(cd pr-app/front && npm ci && npm run build)` | Passed; Vite built 809 modules. |
+| `(cd invoice-app/front && npm ci && npm run build)` | Passed; Vite built 812 modules. |
+| `docker compose config` | Passed. |
+| `docker compose up --build -d` | Built all six application/support images and started both backends and frontends. |
+
+Both `npm ci` runs reported five audit findings (one low, four high) in the existing dependency set.
+
+The running stack also passed the PR 3 path. The author first received an empty list, while another employee received `403`. After approval, two validated invoices appeared for both the author and finance in descending order and with exactly the three documented fields; matching legacy text remained excluded. With Invoice stopped, the PR list and PDF still returned `200` while the panel endpoint returned the controlled `503`. Restarting Invoice restored the two-row response.
+
 ## Trade-offs and alternatives
 
 | Decision | Trade-off and rejected alternative |
@@ -283,8 +302,8 @@ The work is split into three reviewer-facing pull requests:
 | Pull request | Scope |
 |---|---|
 | 1. Design proposal | Implemented and merged. |
-| 2. Trusted PR–invoice relationship | Implemented in this branch: PR read contract; Invoice client and save invariant; validation provenance; exact one-to-many query; create/edit selector and failure states; narrow Invoice payment guard found during verification; configuration; backend tests. |
-| 3. Requester invoice-status visibility | Planned: reverse read contract; author/finance authorization; degradable PR detail panel; tests; final documentation update. |
+| 2. Trusted PR–invoice relationship | Implemented and merged: PR read contract; Invoice client and save invariant; validation provenance; exact one-to-many query; create/edit selector and failure states; narrow Invoice payment guard found during verification; configuration; backend tests. |
+| 3. Requester invoice-status visibility | Implemented in this branch: reverse read contract; stable author/finance authorization; degradable PR detail panel; configuration; tests. |
 
 Excluded are a new service, technology migration, cross-domain table reads, PR workflow redesign, audited relinking, Purchase Orders, ERP work, automatic matching, monetary reconciliation, supplier master data, notifications, teams, budgets, and reporting. Tests, configuration, and documentation ship with each feature; there is no cleanup-only PR.
 

@@ -16,6 +16,10 @@ The Invoice backend uses `PR_INTEGRATION_TOKEN` to call the service-facing
 purchase request API. Docker Compose supplies the same development value to
 both backends.
 
+The PR backend uses `INVOICE_INTEGRATION_TOKEN` to retrieve the minimal
+invoice-status view. This reverse call is made only when an authorized user
+opens the status panel.
+
 ## Run locally without Docker
 
 You'll need a Postgres reachable on `localhost:5432` (or override via env).
@@ -32,6 +36,8 @@ POSTGRES_HOST=localhost uv run pr-seed-users
 
 # Long-running API (use the same token in the Invoice backend)
 PR_INTEGRATION_TOKEN=local-dev-pr-integration-token \
+  INVOICE_API_BASE_URL=http://localhost:8002 \
+  INVOICE_INTEGRATION_TOKEN=local-dev-invoice-integration-token \
   POSTGRES_HOST=localhost \
   uv run uvicorn app.main:app --reload --port 8001
 ```
@@ -41,6 +47,11 @@ Connection settings come from environment variables. Either set `DATABASE_URL` d
 For host-based Invoice development, configure its PR base URL as
 `http://localhost:8001`. The integration token is a backend-only credential:
 do not expose it to frontend environment variables or browser code.
+
+`INVOICE_API_BASE_URL` defaults to no value and
+`INVOICE_INTEGRATION_TOKEN` defaults to blank, so the requester invoice panel
+fails closed until both are configured. Calls use two-second connection and
+three-second response timeouts, without retries or caching.
 
 ## Project layout
 
@@ -55,6 +66,7 @@ pr-app/back/
     ├── models.py        # User, PurchaseRequest, Session
     ├── schemas.py       # Pydantic DTOs
     ├── security.py      # Browser sessions + integration-token auth
+    ├── invoice_client.py # Minimal Invoice status client
     ├── pdf.py           # PR export
     ├── routers/         # auth, users, purchase_requests, integration
     └── scripts/
@@ -74,6 +86,7 @@ pr-app/back/
 | `GET`  | `/purchase-request` | cookie | List PRs |
 | `POST` | `/purchase-request-new` | cookie | Create a PR |
 | `PUT`  | `/purchase-request/{id}` | cookie | Update a PR (fields + role-gated status transitions) |
+| `GET` | `/purchase-request/{id}/invoices` | cookie (author or finance) | List recorded statuses for validated invoices |
 | `GET`  | `/purchase-request/{id}/pdf` | cookie | Export the PR as a PDF |
 | `GET` | `/integration/purchase-requests?status=approved` | `X-Integration-Token` | List approved PR references for Invoice |
 | `GET` | `/integration/purchase-requests/{request_code}` | `X-Integration-Token` | Look up one PR reference in any status |
@@ -83,6 +96,13 @@ Integration responses contain only `request_code`, `request_name`,
 endpoint is deterministically ordered and returns approved requests only. The
 exact endpoint returns non-approved requests as well, allowing the Invoice
 backend to distinguish an ineligible PR from a missing one.
+
+Purchase-request responses include nullable `author_id`. The invoice-status
+proxy authorizes with that stable identifier, resolves the numeric PR ID to its
+canonical code, and returns only `id`, `invoice_number`, and `invoice_status`.
+Legacy PRs without `author_id` are finance-only. Invoice dependency failures
+use stable `{ "code", "message" }` responses with `502` or `503`; normal PR
+operations remain independent.
 
 ## Status machine
 

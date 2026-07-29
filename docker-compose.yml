@@ -70,6 +70,8 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: casestudy
       PR_INTEGRATION_TOKEN: ${PR_INTEGRATION_TOKEN:-local-dev-pr-integration-token}
+      INVOICE_API_BASE_URL: http://invoice-app-back:8002
+      INVOICE_INTEGRATION_TOKEN: ${INVOICE_INTEGRATION_TOKEN:-local-dev-invoice-integration-token}
     ports:
       - "8001:8001"
 
@@ -98,6 +100,7 @@ services:
       POSTGRES_DB: casestudy
       PR_API_BASE_URL: http://pr-app-back:8001
       PR_INTEGRATION_TOKEN: ${PR_INTEGRATION_TOKEN:-local-dev-pr-integration-token}
+      INVOICE_INTEGRATION_TOKEN: ${INVOICE_INTEGRATION_TOKEN:-local-dev-invoice-integration-token}
     ports:
       - "8002:8002"
 
