@@ -11,6 +11,10 @@ import {
   TextInput,
 } from '@mantine/core';
 import { api } from '../api.js';
+import { usePurchaseRequests } from '../hooks/usePurchaseRequests.js';
+import PurchaseRequestSelect, {
+  SupplierMismatchWarning,
+} from './PurchaseRequestSelect.jsx';
 
 const EMPTY = {
   invoice_number: '',
@@ -27,6 +31,15 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const resetRef = useRef(null);
+  const {
+    requests,
+    status: purchaseRequestStatus,
+    error: purchaseRequestError,
+    retry: retryPurchaseRequests,
+  } = usePurchaseRequests(opened);
+  const selectedPurchaseRequest = requests.find(
+    (request) => request.request_code === form.purchase_request_number
+  );
 
   // Read value synchronously before scheduling the state update — React 19
   // + StrictMode invokes functional updaters twice and `e.currentTarget`
@@ -46,6 +59,15 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
     onClose();
   };
 
+  const selectPurchaseRequest = (code, request) => {
+    if (!code || !request) return;
+    setForm((current) => ({
+      ...current,
+      purchase_request_number: code,
+      supplier: request.supplier_name,
+    }));
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setError(null);
@@ -54,8 +76,7 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
       const fd = new FormData();
       fd.append('invoice_number', form.invoice_number);
       fd.append('supplier', form.supplier);
-      if (form.purchase_request_number)
-        fd.append('purchase_request_number', form.purchase_request_number);
+      fd.append('purchase_request_number', form.purchase_request_number);
       fd.append('invoice_sum', form.invoice_sum);
       if (form.invoice_sum_paid !== '' && form.invoice_sum_paid != null)
         fd.append('invoice_sum_paid', form.invoice_sum_paid);
@@ -125,13 +146,20 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
               value={form.supplier}
               onChange={setField('supplier')}
             />
-            <TextInput
-              label="Purchase request #"
-              placeholder="PR-2"
+            <PurchaseRequestSelect
+              requests={requests}
+              status={purchaseRequestStatus}
+              error={purchaseRequestError}
               value={form.purchase_request_number}
-              onChange={setField('purchase_request_number')}
+              onChange={selectPurchaseRequest}
+              onRetry={retryPurchaseRequests}
+              required
             />
           </Group>
+          <SupplierMismatchWarning
+            invoiceSupplier={form.supplier}
+            purchaseRequest={selectedPurchaseRequest}
+          />
           <Group grow align="flex-start">
             <NumberInput
               label="Invoice sum"
@@ -170,7 +198,15 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
             <Button variant="default" onClick={close} disabled={submitting}>
               Cancel
             </Button>
-            <Button type="submit" loading={submitting}>
+            <Button
+              type="submit"
+              loading={submitting}
+              disabled={
+                purchaseRequestStatus !== 'success' ||
+                requests.length === 0 ||
+                !selectedPurchaseRequest
+              }
+            >
               Upload invoice
             </Button>
           </Group>

@@ -63,3 +63,15 @@ class PurchaseRequestOut(BaseModel):
     request_approval_status: PRStatus
     created_at: datetime
     updated_at: datetime
+
+
+class PurchaseRequestReferenceOut(BaseModel):
+    """Minimal service-facing purchase request contract."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    request_code: str
+    request_name: str
+    request_author: str
+    supplier_name: str
+    request_approval_status: PRStatus

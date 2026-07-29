@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Anchor,
+  Badge,
   Box,
   Button,
   Card,
@@ -30,20 +32,40 @@ export default function InvoiceList() {
   const [query, setQuery] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [purchaseRequestFilter, setPurchaseRequestFilter] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const loadRequestId = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const currentRequestId = ++loadRequestId.current;
     setLoading(true);
+    setLoadError(null);
+    setInvoices([]);
     try {
-      const r = await api.get('/invoice');
-      setInvoices(r.data);
+      const response = await api.get('/invoice', {
+        params: purchaseRequestFilter
+          ? { purchase_request_number: purchaseRequestFilter }
+          : undefined,
+      });
+      if (loadRequestId.current === currentRequestId) {
+        setInvoices(response.data);
+      }
+    } catch (error) {
+      if (loadRequestId.current === currentRequestId) {
+        setLoadError(
+          error?.response?.data?.message || 'Could not load invoices.'
+        );
+      }
     } finally {
-      setLoading(false);
+      if (loadRequestId.current === currentRequestId) {
+        setLoading(false);
+      }
     }
-  };
+  }, [purchaseRequestFilter]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -88,6 +110,43 @@ export default function InvoiceList() {
             w={360}
           />
 
+          {purchaseRequestFilter && (
+            <Alert color="violet" title="Purchase request filter">
+              <Group justify="space-between" align="center">
+                <Text size="sm">
+                  Showing validated invoices linked to{' '}
+                  <strong>{purchaseRequestFilter}</strong>.
+                </Text>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="light"
+                  color="violet"
+                  onClick={() => setPurchaseRequestFilter(null)}
+                >
+                  Clear filter
+                </Button>
+              </Group>
+            </Alert>
+          )}
+
+          {loadError && (
+            <Alert color="red" title="Invoices unavailable">
+              <Group justify="space-between" align="center">
+                <Text size="sm">{loadError}</Text>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="light"
+                  color="red"
+                  onClick={load}
+                >
+                  Retry
+                </Button>
+              </Group>
+            </Alert>
+          )}
+
           <SummaryCards invoices={invoices} />
 
           <Card withBorder p={0} radius="md" style={{ overflow: 'hidden' }}>
@@ -114,22 +173,52 @@ export default function InvoiceList() {
                     </Table.Td>
                   </Table.Tr>
                 )}
-                {!loading && filtered.length === 0 && (
+                {!loading && !loadError && filtered.length === 0 && (
                   <Table.Tr>
                     <Table.Td colSpan={8}>
                       <Center p="xl">
-                        <Text c="dimmed">No invoices yet — upload one to get started.</Text>
+                        <Text c="dimmed">
+                          {query.trim()
+                            ? purchaseRequestFilter
+                              ? `No invoices linked to ${purchaseRequestFilter} match the current search.`
+                              : 'No invoices match the current search.'
+                            : purchaseRequestFilter
+                              ? `No validated invoices are linked to ${purchaseRequestFilter}.`
+                              : 'No invoices yet — upload one to get started.'}
+                        </Text>
                       </Center>
                     </Table.Td>
                   </Table.Tr>
                 )}
                 {!loading &&
+                  !loadError &&
                   filtered.map((inv) => (
                     <Table.Tr key={inv.id}>
                       <Table.Td fw={500}>{inv.invoice_number}</Table.Td>
                       <Table.Td>{inv.supplier}</Table.Td>
-                      <Table.Td fw={500} c="violet">
-                        {inv.purchase_request_number || '—'}
+                      <Table.Td>
+                        {inv.purchase_request_number && inv.purchase_request_validated_at ? (
+                          <Anchor
+                            component="button"
+                            type="button"
+                            fw={500}
+                            c="violet"
+                            onClick={() =>
+                              setPurchaseRequestFilter(inv.purchase_request_number)
+                            }
+                          >
+                            {inv.purchase_request_number}
+                          </Anchor>
+                        ) : inv.purchase_request_number ? (
+                          <Stack gap={3} align="flex-start">
+                            <Text size="sm" fw={500}>{inv.purchase_request_number}</Text>
+                            <Badge color="yellow" variant="light" size="xs">
+                              unverified
+                            </Badge>
+                          </Stack>
+                        ) : (
+                          '—'
+                        )}
                       </Table.Td>
                       <Table.Td fw={500}>{fmt(inv.invoice_sum)}</Table.Td>
                       <Table.Td>{fmt(inv.invoice_sum_paid)}</Table.Td>

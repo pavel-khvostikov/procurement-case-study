@@ -33,6 +33,12 @@ logging:
   level:
     org.hibernate.SQL: warn
 
+purchase-request:
+  api-base-url: ${PR_API_BASE_URL:http://localhost:8001}
+  integration-token: ${PR_INTEGRATION_TOKEN:}
+  connect-timeout: 2s
+  response-timeout: 3s
+
 # SpringDoc OpenAPI / Swagger UI paths. Defaults are already these, but
 # pinning them here makes the URL discoverable without leaving this file.
 springdoc:

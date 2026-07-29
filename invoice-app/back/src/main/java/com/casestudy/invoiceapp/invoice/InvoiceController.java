@@ -3,6 +3,7 @@ package com.casestudy.invoiceapp.invoice;
 import com.casestudy.invoiceapp.auth.CurrentUserFilter;
 import com.casestudy.invoiceapp.invoice.dto.InvoiceSummaryDto;
 import com.casestudy.invoiceapp.invoice.dto.InvoiceUpdateDto;
+import com.casestudy.invoiceapp.purchaserequest.PurchaseRequestReference;
 import com.casestudy.invoiceapp.user.User;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -16,24 +17,33 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Set;
 
 @RestController
 @RequestMapping("/invoice")
 public class InvoiceController {
 
-    private static final Set<String> VALID_STATUSES = Set.of("created", "prepaid", "paid");
-
     private final InvoiceRepository invoices;
+    private final InvoiceService invoiceService;
 
-    public InvoiceController(InvoiceRepository invoices) {
+    public InvoiceController(InvoiceRepository invoices, InvoiceService invoiceService) {
         this.invoices = invoices;
+        this.invoiceService = invoiceService;
     }
 
     @GetMapping
-    public List<InvoiceSummaryDto> list(HttpServletRequest req) {
+    public List<InvoiceSummaryDto> list(
+            HttpServletRequest req,
+            @RequestParam(value = "purchase_request_number", required = false)
+            String purchaseRequestNumber
+    ) {
         requireFinance(req);
-        return invoices.findAllSummaries();
+        return invoiceService.list(purchaseRequestNumber);
+    }
+
+    @GetMapping("/purchase-requests")
+    public List<PurchaseRequestReference> purchaseRequests(HttpServletRequest req) {
+        requireFinance(req);
+        return invoiceService.approvedPurchaseRequests();
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -48,23 +58,28 @@ public class InvoiceController {
             @RequestParam(value = "attachment", required = false) MultipartFile attachment
     ) throws IOException {
         User user = requireFinance(req);
-        requireValidStatus(invoiceStatus);
-
-        Invoice inv = new Invoice();
-        inv.setInvoiceNumber(invoiceNumber);
-        inv.setSupplier(supplier);
-        inv.setPurchaseRequestNumber(purchaseRequestNumber);
-        inv.setInvoiceSum(invoiceSum);
-        inv.setInvoiceSumPaid(invoiceSumPaid == null ? BigDecimal.ZERO : invoiceSumPaid);
-        inv.setInvoiceStatus(invoiceStatus);
-        inv.setUploadedBy(user.getUsername());
+        byte[] attachmentBytes = null;
+        String attachmentFilename = null;
+        String attachmentContentType = null;
         if (attachment != null && !attachment.isEmpty()) {
-            inv.setAttachmentBytes(attachment.getBytes());
-            inv.setAttachmentFilename(attachment.getOriginalFilename());
-            inv.setAttachmentContentType(attachment.getContentType());
+            attachmentBytes = attachment.getBytes();
+            attachmentFilename = attachment.getOriginalFilename();
+            attachmentContentType = attachment.getContentType();
         }
-        invoices.save(inv);
-        return ResponseEntity.status(HttpStatus.CREATED).body(toSummary(inv));
+
+        InvoiceSummaryDto created = invoiceService.create(new InvoiceService.CreateInvoiceCommand(
+                invoiceNumber,
+                supplier,
+                purchaseRequestNumber,
+                invoiceSum,
+                invoiceSumPaid,
+                invoiceStatus,
+                attachmentBytes,
+                attachmentFilename,
+                attachmentContentType,
+                user.getUsername()
+        ));
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
     @PutMapping(value = "/{id}", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -72,20 +87,7 @@ public class InvoiceController {
                                     @PathVariable Long id,
                                     @RequestBody InvoiceUpdateDto body) {
         requireFinance(req);
-        Invoice inv = invoices.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
-
-        if (body.invoiceNumber != null)         inv.setInvoiceNumber(body.invoiceNumber);
-        if (body.supplier != null)              inv.setSupplier(body.supplier);
-        if (body.purchaseRequestNumber != null) inv.setPurchaseRequestNumber(body.purchaseRequestNumber);
-        if (body.invoiceSum != null)            inv.setInvoiceSum(body.invoiceSum);
-        if (body.invoiceSumPaid != null)        inv.setInvoiceSumPaid(body.invoiceSumPaid);
-        if (body.invoiceStatus != null) {
-            requireValidStatus(body.invoiceStatus);
-            inv.setInvoiceStatus(body.invoiceStatus);
-        }
-        invoices.save(inv);
-        return toSummary(inv);
+        return invoiceService.update(id, body);
     }
 
     @GetMapping("/{id}/attachment")
@@ -117,20 +119,4 @@ public class InvoiceController {
         return user;
     }
 
-    private static void requireValidStatus(String status) {
-        if (!VALID_STATUSES.contains(status)) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Invalid status — expected one of: created, prepaid, paid"
-            );
-        }
-    }
-
-    private static InvoiceSummaryDto toSummary(Invoice i) {
-        return new InvoiceSummaryDto(
-                i.getId(), i.getInvoiceNumber(), i.getSupplier(), i.getPurchaseRequestNumber(),
-                i.getInvoiceSum(), i.getInvoiceSumPaid(), i.getInvoiceStatus(),
-                i.getAttachmentFilename(), i.getUploadedBy(), i.getCreatedAt(), i.getUpdatedAt()
-        );
-    }
 }

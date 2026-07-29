@@ -15,6 +15,7 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     @Query("""
         select new com.casestudy.invoiceapp.invoice.dto.InvoiceSummaryDto(
             i.id, i.invoiceNumber, i.supplier, i.purchaseRequestNumber,
+            i.purchaseRequestValidatedAt,
             i.invoiceSum, i.invoiceSumPaid, i.invoiceStatus,
             i.attachmentFilename, i.uploadedBy, i.createdAt, i.updatedAt
         )
@@ -22,4 +23,22 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
         order by i.id desc
     """)
     List<InvoiceSummaryDto> findAllSummaries();
+
+    /**
+     * A matching legacy string is not a relationship. Only rows with
+     * validation provenance participate in exact PR filtering.
+     */
+    @Query("""
+        select new com.casestudy.invoiceapp.invoice.dto.InvoiceSummaryDto(
+            i.id, i.invoiceNumber, i.supplier, i.purchaseRequestNumber,
+            i.purchaseRequestValidatedAt,
+            i.invoiceSum, i.invoiceSumPaid, i.invoiceStatus,
+            i.attachmentFilename, i.uploadedBy, i.createdAt, i.updatedAt
+        )
+        from Invoice i
+        where i.purchaseRequestNumber = :purchaseRequestNumber
+          and i.purchaseRequestValidatedAt is not null
+        order by i.id desc
+    """)
+    List<InvoiceSummaryDto> findValidatedSummariesByPurchaseRequestNumber(String purchaseRequestNumber);
 }
