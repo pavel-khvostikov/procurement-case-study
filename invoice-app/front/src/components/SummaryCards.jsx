@@ -3,6 +3,8 @@ import { Card, Group, Stack, Text } from '@mantine/core';
 const fmt = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
+const cents = (n) => Math.round(Number(n || 0) * 100);
+
 const isThisMonth = (iso) => {
   if (!iso) return false;
   const d = new Date(iso);
@@ -27,21 +29,27 @@ function StatCard({ label, value, valueColor }) {
 export default function SummaryCards({ invoices }) {
   const total = invoices.length;
   const outstanding = invoices
-    .filter((i) => i.invoice_status !== 'paid')
-    .reduce((acc, i) => acc + (Number(i.invoice_sum) - Number(i.invoice_sum_paid)), 0);
+    .reduce(
+      (acc, i) => acc + Math.max(cents(i.invoice_sum) - cents(i.invoice_sum_paid), 0),
+      0
+    );
   const prepaid = invoices
-    .filter((i) => i.invoice_status === 'prepaid')
-    .reduce((acc, i) => acc + Number(i.invoice_sum_paid), 0);
+    .filter((i) => {
+      const total = cents(i.invoice_sum);
+      const paid = cents(i.invoice_sum_paid);
+      return paid > 0 && paid < total;
+    })
+    .reduce((acc, i) => acc + cents(i.invoice_sum_paid), 0);
   const paidThisMonth = invoices
     .filter((i) => i.invoice_status === 'paid' && isThisMonth(i.updated_at))
-    .reduce((acc, i) => acc + Number(i.invoice_sum_paid), 0);
+    .reduce((acc, i) => acc + cents(i.invoice_sum_paid), 0);
 
   return (
     <Group gap="md" grow>
       <StatCard label="Total invoices" value={String(total)} />
-      <StatCard label="Outstanding" value={fmt(outstanding)} valueColor="red" />
-      <StatCard label="Prepaid (partial)" value={fmt(prepaid)} valueColor="yellow.7" />
-      <StatCard label="Paid this month" value={fmt(paidThisMonth)} valueColor="teal" />
+      <StatCard label="Outstanding" value={fmt(outstanding / 100)} valueColor="red" />
+      <StatCard label="Prepaid (partial)" value={fmt(prepaid / 100)} valueColor="yellow.7" />
+      <StatCard label="Paid this month" value={fmt(paidThisMonth / 100)} valueColor="teal" />
     </Group>
   );
 }

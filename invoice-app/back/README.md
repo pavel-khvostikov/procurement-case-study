@@ -48,7 +48,7 @@ All routes except `/auth/login` and `/auth/logout` require an `invoice_token` co
 | `GET`  | `/invoice` | — | List all invoices. Does not include attachment bytes. |
 | `GET`  | `/invoice?purchase_request_number=PR-2` | — | Exact local filter returning only validated links. |
 | `GET`  | `/invoice/purchase-requests` | — | Proxy approved PR candidates from the PR backend. |
-| `POST` | `/invoice` | `multipart/form-data` | Create. Fields: `invoice_number`, `supplier`, required `purchase_request_number`, `invoice_sum`, `invoice_sum_paid`, `invoice_status`, `attachment` (file, optional). |
+| `POST` | `/invoice` | `multipart/form-data` | Create. Fields: `invoice_number`, `supplier`, required `purchase_request_number`, `invoice_sum`, `invoice_sum_paid`, `invoice_status`, `attachment` (file, optional). Paid amount may be omitted only for `created`, where it defaults to zero. |
 | `PUT`  | `/invoice/{id}` | JSON | Partial update. An omitted PR preserves it; a changed code or explicit legacy reconciliation validates it. Null/blank cannot clear it. |
 | `GET`  | `/invoice/{id}/attachment` | — | Streams the PDF. 404 if no file attached. |
 
@@ -63,6 +63,15 @@ remote call. Controlled errors use `{ "code": "...", "message": "..." }`:
 invalid relationships return `422`, dependency outages return `503`, and
 malformed or unauthorized upstream responses return `502`. Reads and unrelated
 edits do not call the PR backend.
+
+Invoice-local payment validation also enforces the starter's zero/partial/full
+semantics: amounts must be cent-exact, totals must be positive, `created`
+requires zero paid, `prepaid` requires a partial amount, and `paid` requires the
+full amount. Contradictory creates or updates that submit amount/status fields
+return Spring's standard `400` before PR lookup or entity mutation, outside the
+`{ "code", "message" }` integration-error contract. Existing contradictory
+rows are not backfilled, and unrelated updates that omit payment fields do not
+revalidate them.
 
 ## Project layout
 
@@ -83,7 +92,7 @@ src/main/java/com/casestudy/invoiceapp/
 ├── invoice/
 │   ├── Invoice.java          # JPA entity, includes attachment_bytes
 │   ├── InvoiceRepository.java # findAllSummaries() projects past the byte[]
-│   ├── InvoiceService.java   # create/update relationship invariant
+│   ├── InvoiceService.java   # relationship and payment invariants
 │   ├── InvoiceController.java # user API + download endpoint
 │   └── dto/
 │       ├── InvoiceSummaryDto.java

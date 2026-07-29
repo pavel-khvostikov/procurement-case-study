@@ -40,6 +40,7 @@ The prototype establishes the smallest reliable boundary for this handoff while 
 | `request_code` is a stable external business identifier. | Use it instead of the database ID and make its stability part of the contract. |
 | PR and invoice supplier strings may legitimately differ. | Prefill the invoice supplier and warn on mismatch, but do not block the save. |
 | Existing PR strings cannot be trusted automatically. | Treat them as legacy/unverified until finance validates a selection. |
+| In the starter vocabulary, `created` means unpaid, `prepaid` means partially paid, and `paid` means fully paid. | Fill the obvious status-derived amounts in the UI and reject contradictory new invoices or updates that submit amount/status fields. |
 
 ### Notes and deferred questions
 
@@ -51,7 +52,11 @@ These production questions do not block the prototype:
 - Which ERP or legal-entity identifier should define supplier identity?
 - What amount, currency, tax, tolerance, credit-note, and partial-payment rules define reconciliation?
 
-Other baseline issues outside this integration are concurrency-unsafe PR-code generation, mutable usernames beside stored author names, contradictory invoice amounts and statuses, duplicate invoice numbers, hardcoded USD display, broad PR visibility, weak session expiry, attachment handling, and missing migrations. The PR UI also describes rejection and finance self-approval differently from the backend. These remain separate from the integration PRs.
+Manual tests exposed a starter defect: an invoice could be saved as `paid` with zero paid, disappearing from Outstanding while contributing nothing to Paid this month. A narrow fix in this branch validates positive, cent-exact totals and consistent zero/partial/full states on create and updates that submit amount/status fields. Selecting `paid` copies the invoice total; selecting `created` resets paid to zero; backend validation remains authoritative. Outstanding is now derived from amounts. Existing contradictory rows are not backfilled, and unrelated updates that omit payment fields remain available.
+
+“Paid this month” still uses generic `updated_at`, so an unrelated edit can make an old payment appear current and partial payments cannot be assigned reliably to a month. Accurate payment dates, installments, reversals, and actors require a payment timestamp or ledger and remain roadmap work.
+
+Other baseline issues outside this integration are concurrency-unsafe PR-code generation, mutable usernames beside stored author names, duplicate or blank invoice identity fields, hardcoded USD display, broad PR visibility, weak session expiry, attachment handling, and missing migrations. The PR UI also describes rejection and finance self-approval differently from the backend. These remain separate from the integration PRs.
 
 ## Proposed design
 
@@ -105,7 +110,7 @@ New invoices cannot enter the latter two states. PR 2 relationship queries and t
 
 The relationship provides logical referential integrity without a cross-application foreign key or PR snapshot. Storing the code keeps reads available during an outage and avoids synchronizing copied fields. The invoice supplier remains independent: selection prefills it, but finance may accept a mismatch warning and retain another value.
 
-The Invoice backend enforces these invariants before persistence:
+The Invoice backend enforces these relationship invariants before persistence:
 
 - Every new invoice has one validated, currently approved PR.
 - Changing an invoice's PR validates the new code.
@@ -190,7 +195,7 @@ PR validation is a remote read followed by a local Invoice transaction. This doe
 
 ## Failure and ambiguity handling
 
-Integration errors return a stable machine-readable `code` and safe `message` without exposing upstream bodies, URLs, or credentials. Failed create and relink requests persist nothing.
+Purchase-request integration errors return a stable machine-readable `code` and safe `message` without exposing upstream bodies, URLs, or credentials. Failed create and relink requests persist nothing. Invoice-local payment validation uses Spring's standard `400` response and is outside the `PURCHASE_REQUEST_*` error contract.
 
 | Case | Behaviour |
 |---|---|
@@ -199,6 +204,7 @@ Integration errors return a stable machine-readable `code` and safe `message` wi
 | PR exists but is not approved | `422 PURCHASE_REQUEST_NOT_APPROVED`. |
 | PR timeout, connection failure, or `5xx` | `503 PURCHASE_REQUEST_SERVICE_UNAVAILABLE`. |
 | PR authentication failure or malformed contract | `502 PURCHASE_REQUEST_SERVICE_ERROR`. |
+| Invoice amount and payment status contradict each other | Standard `400`; persist nothing and do not call the PR service. |
 | Candidate becomes ineligible after selection | Save-time lookup rejects it. |
 | No approved candidates exist | Show an empty state, not an outage. |
 | Candidate service is unavailable during create | Disable creation and show a retryable error; do not fall back to free text. |
@@ -226,6 +232,7 @@ Integration endpoints reject missing or invalid tokens. Tokens never appear in `
 | Peer outage breaks unrelated work | Keep reads and unrelated invoice edits available; fail create/relink with the defined status. |
 | One-to-many filtering is wrong | Return two validated invoices for one PR while excluding another PR and a matching legacy string. |
 | Integration failures are ambiguous | Map timeouts, upstream `5xx`, authentication failures, and malformed payloads to controlled errors. |
+| Payment state is contradictory | Accept consistent zero/partial/full states; reject invalid creates and updates that submit amount/status fields before PR lookup or mutation; keep unrelated legacy edits available. |
 | Optional PR 3 status leaks invoice data (future) | Require the token; omit amounts and attachments; permit author/finance only; distinguish empty from unavailable. |
 
 FastAPI tests use `pytest`, `TestClient`, dependency overrides, and an isolated database. Spring tests use `MockMvc`, JPA tests, and a mocked HTTP boundary. Backend invariants are automated; the small UI paths use the demonstration below rather than a new frontend test framework.
@@ -238,10 +245,10 @@ Verified on 2026-07-29:
 |---|---|
 | `git diff --check` | Passed. |
 | `(cd pr-app/back && uv sync && uv run pytest)` | Host `uv` was unavailable. The equivalent official uv container run passed all 10 tests in 13.72s, with one Passlib `crypt` deprecation warning. |
-| `(cd invoice-app/back && mvn test)` | Host Maven was unavailable. The equivalent Maven 3.9.9 / Java 17 container run passed all 23 tests with no failures, errors, or skips. |
-| `(cd invoice-app/front && npm ci && npm run build)` | Passed; Vite built 811 modules. `npm ci` reported five audit findings (one low, four high) in the existing dependency set. |
+| `(cd invoice-app/back && mvn test)` | Host Maven was unavailable. The equivalent Maven 3.9.9 / Java 17 container run passed all 38 tests with no failures, errors, or skips. |
+| `(cd invoice-app/front && npm ci && npm run build)` | Passed after the payment fix; Vite built 812 modules. `npm ci` reported five audit findings (one low, four high) in the existing dependency set. |
 | `docker compose config` | Passed. |
-| `docker compose up --build -d` | Built the six application/support images and started the stack; Postgres was healthy and all four applications were reachable. |
+| `docker compose up --build -d` | Built the six application/support images and started the stack; Postgres was healthy and all four applications were reachable. The Invoice backend and frontend were rebuilt after the payment fix and remained reachable. |
 
 ### End-to-end demonstration
 
@@ -253,6 +260,7 @@ The running stack passed this scenario:
 4. Fabricated and non-approved PRs returned the defined `422` errors and persisted nothing.
 5. With the PR backend stopped, unfiltered reads, exact filtering, and an unrelated edit still returned `200`; candidate loading and new creation returned the defined `503`.
 6. After restart, candidate loading and validated invoice creation recovered.
+7. A `paid` create without a paid amount returned `400` and left the invoice count unchanged.
 
 ## Trade-offs and alternatives
 
@@ -275,7 +283,7 @@ The work is split into three reviewer-facing pull requests:
 | Pull request | Scope |
 |---|---|
 | 1. Design proposal | Implemented and merged. |
-| 2. Trusted PR–invoice relationship | Implemented in this branch: PR read contract; Invoice client and save invariant; validation provenance; exact one-to-many query; create/edit selector and failure states; configuration; backend tests. |
+| 2. Trusted PR–invoice relationship | Implemented in this branch: PR read contract; Invoice client and save invariant; validation provenance; exact one-to-many query; create/edit selector and failure states; narrow Invoice payment guard found during verification; configuration; backend tests. |
 | 3. Requester invoice-status visibility | Planned: reverse read contract; author/finance authorization; degradable PR detail panel; tests; final documentation update. |
 
 Excluded are a new service, technology migration, cross-domain table reads, PR workflow redesign, audited relinking, Purchase Orders, ERP work, automatic matching, monetary reconciliation, supplier master data, notifications, teams, budgets, and reporting. Tests, configuration, and documentation ship with each feature; there is no cleanup-only PR.
@@ -290,7 +298,7 @@ Excluded are a new service, technology migration, cross-domain table reads, PR w
 | 2 | Replace static tokens with managed service identity and TLS; rotate secrets; version contracts; add consumer/provider contract tests. | Secure and stabilize the proven boundary. |
 | 3 | Add structured logs, correlation IDs, dependency metrics, alerts, and timeout dashboards. | Distinguish business errors from peer failures before adding retries or caching. |
 | 4 | Introduce a dedicated atomic relink operation recording old code, new code, actor, timestamp, and reason. | Corrections need accountability rather than generic editing. |
-| 5 | Define idempotent invoice creation and invoice integrity rules, including duplicate numbers and amount/status constraints. | Agree supplier and monetary semantics before automation. |
+| 5 | Define remaining invoice integrity rules: idempotency, duplicate numbers, currency/precision, payment dates, transitions, and audit history. | Stabilize supplier and monetary semantics before automation. |
 | 6 | Add server-side search and pagination; introduce caching only after measuring load and freshness requirements. | Scale from measured demand. |
 
 ### Broader product capabilities

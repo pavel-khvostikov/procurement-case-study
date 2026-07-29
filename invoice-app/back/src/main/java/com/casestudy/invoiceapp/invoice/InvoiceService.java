@@ -38,7 +38,10 @@ public class InvoiceService {
     }
 
     public InvoiceSummaryDto create(CreateInvoiceCommand command) {
-        requireValidStatus(command.invoiceStatus());
+        BigDecimal paidAmount = command.invoiceSumPaid() == null
+                ? BigDecimal.ZERO
+                : command.invoiceSumPaid();
+        validatePaymentState(command.invoiceSum(), paidAmount, command.invoiceStatus());
         ValidatedRelationship relationship =
                 relationships.validateForCreate(command.purchaseRequestNumber());
 
@@ -48,9 +51,7 @@ public class InvoiceService {
         invoice.setPurchaseRequestNumber(relationship.requestCode());
         invoice.setPurchaseRequestValidatedAt(relationship.validatedAt());
         invoice.setInvoiceSum(command.invoiceSum());
-        invoice.setInvoiceSumPaid(
-                command.invoiceSumPaid() == null ? BigDecimal.ZERO : command.invoiceSumPaid()
-        );
+        invoice.setInvoiceSumPaid(paidAmount);
         invoice.setInvoiceStatus(command.invoiceStatus());
         invoice.setUploadedBy(command.uploadedBy());
         invoice.setAttachmentBytes(command.attachmentBytes());
@@ -64,8 +65,16 @@ public class InvoiceService {
         Invoice invoice = invoices.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Invoice not found"));
 
-        if (update.invoiceStatus != null) {
-            requireValidStatus(update.invoiceStatus);
+        if (updatesPaymentState(update)) {
+            validatePaymentState(
+                    update.invoiceSum == null ? invoice.getInvoiceSum() : update.invoiceSum,
+                    update.invoiceSumPaid == null
+                            ? invoice.getInvoiceSumPaid()
+                            : update.invoiceSumPaid,
+                    update.invoiceStatus == null
+                            ? invoice.getInvoiceStatus()
+                            : update.invoiceStatus
+            );
         }
 
         /*
@@ -102,13 +111,60 @@ public class InvoiceService {
         return relationships.approvedCandidates();
     }
 
-    private static void requireValidStatus(String status) {
+    private static boolean updatesPaymentState(InvoiceUpdateDto update) {
+        return update.invoiceSum != null
+                || update.invoiceSumPaid != null
+                || update.invoiceStatus != null;
+    }
+
+    private static void validatePaymentState(
+            BigDecimal invoiceSum,
+            BigDecimal invoiceSumPaid,
+            String status
+    ) {
         if (!VALID_STATUSES.contains(status)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Invalid status — expected one of: created, prepaid, paid"
             );
         }
+
+        if (invoiceSum == null || invoiceSum.signum() <= 0) {
+            throw invalidPaymentState("Invoice sum must be greater than zero");
+        }
+        if (invoiceSumPaid == null
+                || invoiceSumPaid.signum() < 0
+                || invoiceSumPaid.compareTo(invoiceSum) > 0) {
+            throw invalidPaymentState(
+                    "Paid amount must be between zero and the invoice sum"
+            );
+        }
+        if (!hasCentPrecision(invoiceSum) || !hasCentPrecision(invoiceSumPaid)) {
+            throw invalidPaymentState("Invoice amounts support at most two decimal places");
+        }
+
+        int paidComparedToZero = invoiceSumPaid.compareTo(BigDecimal.ZERO);
+        int paidComparedToTotal = invoiceSumPaid.compareTo(invoiceSum);
+        boolean consistent = switch (status) {
+            case "created" -> paidComparedToZero == 0;
+            case "prepaid" -> paidComparedToZero > 0 && paidComparedToTotal < 0;
+            case "paid" -> paidComparedToTotal == 0;
+            default -> false;
+        };
+        if (!consistent) {
+            throw invalidPaymentState(
+                    "Payment status must match the paid amount: created means zero, "
+                            + "prepaid means a partial payment, and paid means the full invoice sum"
+            );
+        }
+    }
+
+    private static boolean hasCentPrecision(BigDecimal amount) {
+        return amount.stripTrailingZeros().scale() <= 2;
+    }
+
+    private static ResponseStatusException invalidPaymentState(String message) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
     }
 
     private static InvoiceSummaryDto toSummary(Invoice invoice) {

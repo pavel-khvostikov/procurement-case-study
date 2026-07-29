@@ -12,6 +12,11 @@ import {
 } from '@mantine/core';
 import { api } from '../api.js';
 import { usePurchaseRequests } from '../hooks/usePurchaseRequests.js';
+import {
+  paymentStateError,
+  updatePaymentField,
+  updatePaymentStatus,
+} from '../paymentForm.js';
 import PurchaseRequestSelect, {
   SupplierMismatchWarning,
 } from './PurchaseRequestSelect.jsx';
@@ -59,7 +64,11 @@ export default function EditInvoiceModal({ invoice, onClose, onUpdated }) {
     const value = typeof e === 'string' || typeof e === 'number'
       ? e
       : e?.currentTarget?.value ?? '';
-    setForm((f) => ({ ...f, [k]: value }));
+    setForm((current) => updatePaymentField(current, k, value));
+  };
+
+  const setPaymentStatus = (status) => {
+    setForm((current) => updatePaymentStatus(current, status));
   };
 
   const selectPurchaseRequest = (code, request) => {
@@ -102,6 +111,11 @@ export default function EditInvoiceModal({ invoice, onClose, onUpdated }) {
   const relationshipIsValidated = Boolean(
     hasStoredPurchaseRequest && invoice.purchase_request_validated_at
   );
+  const paymentChanged =
+    form.invoice_sum !== invoice.invoice_sum ||
+    form.invoice_sum_paid !== invoice.invoice_sum_paid ||
+    form.invoice_status !== invoice.invoice_status;
+  const paymentError = paymentChanged ? paymentStateError(form) : null;
 
   return (
     <Modal
@@ -160,7 +174,7 @@ export default function EditInvoiceModal({ invoice, onClose, onUpdated }) {
           <Group grow align="flex-start">
             <NumberInput
               label="Invoice sum"
-              min={0}
+              min={0.01}
               decimalScale={2}
               fixedDecimalScale
               value={form.invoice_sum}
@@ -169,10 +183,20 @@ export default function EditInvoiceModal({ invoice, onClose, onUpdated }) {
             <NumberInput
               label="Paid"
               min={0}
+              max={form.invoice_sum || undefined}
+              required={form.invoice_status === 'prepaid'}
+              description={
+                form.invoice_status === 'paid'
+                  ? 'Paid invoices use the full invoice sum.'
+                  : form.invoice_status === 'created'
+                    ? 'Created invoices must have no payment.'
+                    : 'Enter a partial payment below the invoice sum.'
+              }
               decimalScale={2}
               fixedDecimalScale
               value={form.invoice_sum_paid}
               onChange={setField('invoice_sum_paid')}
+              error={paymentError}
             />
           </Group>
 
@@ -231,7 +255,7 @@ export default function EditInvoiceModal({ invoice, onClose, onUpdated }) {
               fullWidth
               data={['created', 'prepaid', 'paid']}
               value={form.invoice_status}
-              onChange={(v) => setForm((f) => ({ ...f, invoice_status: v }))}
+              onChange={setPaymentStatus}
             />
           </Stack>
 
@@ -241,7 +265,11 @@ export default function EditInvoiceModal({ invoice, onClose, onUpdated }) {
             <Button variant="default" onClick={onClose} disabled={saving}>
               Cancel
             </Button>
-            <Button type="submit" loading={saving}>
+            <Button
+              type="submit"
+              loading={saving}
+              disabled={Boolean(paymentError)}
+            >
               Save changes
             </Button>
           </Group>

@@ -12,6 +12,11 @@ import {
 } from '@mantine/core';
 import { api } from '../api.js';
 import { usePurchaseRequests } from '../hooks/usePurchaseRequests.js';
+import {
+  paymentStateError,
+  updatePaymentField,
+  updatePaymentStatus,
+} from '../paymentForm.js';
 import PurchaseRequestSelect, {
   SupplierMismatchWarning,
 } from './PurchaseRequestSelect.jsx';
@@ -40,6 +45,11 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
   const selectedPurchaseRequest = requests.find(
     (request) => request.request_code === form.purchase_request_number
   );
+  const paymentError = paymentStateError(form);
+  const showPaymentError =
+    form.invoice_sum !== '' ||
+    form.invoice_sum_paid !== '' ||
+    form.invoice_status !== 'created';
 
   // Read value synchronously before scheduling the state update — React 19
   // + StrictMode invokes functional updaters twice and `e.currentTarget`
@@ -48,7 +58,11 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
     const value = typeof e === 'string' || typeof e === 'number'
       ? e
       : e?.currentTarget?.value ?? '';
-    setForm((f) => ({ ...f, [k]: value }));
+    setForm((current) => updatePaymentField(current, k, value));
+  };
+
+  const setPaymentStatus = (status) => {
+    setForm((current) => updatePaymentStatus(current, status));
   };
 
   const close = () => {
@@ -165,7 +179,7 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
               label="Invoice sum"
               placeholder="11400.00"
               required
-              min={0}
+              min={0.01}
               decimalScale={2}
               fixedDecimalScale
               value={form.invoice_sum}
@@ -175,10 +189,20 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
               label="Paid so far"
               placeholder="0.00"
               min={0}
+              max={form.invoice_sum || undefined}
+              required={form.invoice_status === 'prepaid'}
+              description={
+                form.invoice_status === 'paid'
+                  ? 'Paid invoices use the full invoice sum.'
+                  : form.invoice_status === 'created'
+                    ? 'Created invoices must have no payment.'
+                    : 'Enter a partial payment below the invoice sum.'
+              }
               decimalScale={2}
               fixedDecimalScale
               value={form.invoice_sum_paid}
               onChange={setField('invoice_sum_paid')}
+              error={showPaymentError ? paymentError : null}
             />
           </Group>
 
@@ -188,7 +212,7 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
               fullWidth
               data={['created', 'prepaid', 'paid']}
               value={form.invoice_status}
-              onChange={(v) => setForm((f) => ({ ...f, invoice_status: v }))}
+              onChange={setPaymentStatus}
             />
           </Stack>
 
@@ -204,7 +228,8 @@ export default function UploadInvoiceModal({ opened, onClose, onCreated }) {
               disabled={
                 purchaseRequestStatus !== 'success' ||
                 requests.length === 0 ||
-                !selectedPurchaseRequest
+                !selectedPurchaseRequest ||
+                Boolean(paymentError)
               }
             >
               Upload invoice

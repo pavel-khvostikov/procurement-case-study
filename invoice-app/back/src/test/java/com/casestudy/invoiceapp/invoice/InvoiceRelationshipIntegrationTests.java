@@ -7,6 +7,8 @@ import com.casestudy.invoiceapp.purchaserequest.PurchaseRequestReference;
 import com.casestudy.invoiceapp.user.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -78,6 +80,81 @@ class InvoiceRelationshipIntegrationTests {
             assertThat(invoice.getPurchaseRequestValidatedAt()).isNotNull();
         });
         verify(purchaseRequests).findByCode("PR-2");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "created, 0.00",
+            "prepaid, 25.00",
+            "paid, 100.00"
+    })
+    void consistentPaymentStatesAreAccepted(String paymentStatus, String paidAmount)
+            throws Exception {
+        when(purchaseRequests.findByCode("PR-2"))
+                .thenReturn(Optional.of(reference("PR-2", "approved")));
+
+        mockMvc.perform(multipart("/invoice")
+                        .with(finance())
+                        .param("invoice_number", "INV-100")
+                        .param("supplier", "Atlassian")
+                        .param("purchase_request_number", "PR-2")
+                        .param("invoice_sum", "100.00")
+                        .param("invoice_sum_paid", paidAmount)
+                        .param("invoice_status", paymentStatus))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.invoice_sum_paid").value(Double.parseDouble(paidAmount)))
+                .andExpect(jsonPath("$.invoice_status").value(paymentStatus));
+
+        assertThat(invoices.findAll()).singleElement().satisfies(invoice -> {
+            assertThat(invoice.getInvoiceSumPaid()).isEqualByComparingTo(paidAmount);
+            assertThat(invoice.getInvoiceStatus()).isEqualTo(paymentStatus);
+        });
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "100.00, 0.00, paid",
+            "100.00, 25.00, created",
+            "100.00, 0.00, prepaid",
+            "100.00, 100.00, prepaid",
+            "0.00, 0.00, created",
+            "100.00, -1.00, created",
+            "100.00, 101.00, paid",
+            "0.004, 0.00, created",
+            "1.004, 1.003, prepaid"
+    })
+    void contradictoryPaymentStatesAreRejectedBeforePurchaseRequestLookup(
+            String invoiceSum,
+            String paidAmount,
+            String paymentStatus
+    ) throws Exception {
+        mockMvc.perform(multipart("/invoice")
+                        .with(finance())
+                        .param("invoice_number", "INV-100")
+                        .param("supplier", "Atlassian")
+                        .param("purchase_request_number", "PR-2")
+                        .param("invoice_sum", invoiceSum)
+                        .param("invoice_sum_paid", paidAmount)
+                        .param("invoice_status", paymentStatus))
+                .andExpect(status().isBadRequest());
+
+        assertThat(invoices.count()).isZero();
+        verifyNoInteractions(purchaseRequests);
+    }
+
+    @Test
+    void paidInvoiceCannotOmitPaidAmount() throws Exception {
+        mockMvc.perform(multipart("/invoice")
+                        .with(finance())
+                        .param("invoice_number", "INV-100")
+                        .param("supplier", "Atlassian")
+                        .param("purchase_request_number", "PR-2")
+                        .param("invoice_sum", "100.00")
+                        .param("invoice_status", "paid"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(invoices.count()).isZero();
+        verifyNoInteractions(purchaseRequests);
     }
 
     @Test
@@ -161,6 +238,88 @@ class InvoiceRelationshipIntegrationTests {
     }
 
     @Test
+    void paymentUpdateMustProduceAConsistentEffectiveState() throws Exception {
+        Invoice original = invoices.save(invoice(
+                "INV-1",
+                "Supplier",
+                "PR-2",
+                Instant.parse("2026-01-01T00:00:00Z")
+        ));
+
+        mockMvc.perform(put("/invoice/{id}", original.getId())
+                        .with(finance())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "invoice_sum_paid": 100.00,
+                                  "invoice_status": "paid"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invoice_sum_paid").value(100.00))
+                .andExpect(jsonPath("$.invoice_status").value("paid"));
+
+        mockMvc.perform(put("/invoice/{id}", original.getId())
+                        .with(finance())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"invoice_sum": 150.00}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        Invoice unchanged = invoices.findById(original.getId()).orElseThrow();
+        assertThat(unchanged.getInvoiceSum()).isEqualByComparingTo("100.00");
+        assertThat(unchanged.getInvoiceSumPaid()).isEqualByComparingTo("100.00");
+        assertThat(unchanged.getInvoiceStatus()).isEqualTo("paid");
+        verifyNoInteractions(purchaseRequests);
+    }
+
+    @Test
+    void invalidPaymentUpdateIsRejectedBeforeRelationshipLookupOrMutation() throws Exception {
+        Instant validatedAt = Instant.parse("2026-01-01T00:00:00Z");
+        Invoice original = invoices.save(invoice(
+                "INV-1",
+                "Old supplier",
+                "PR-1",
+                validatedAt
+        ));
+        Invoice persisted = invoices.findById(original.getId()).orElseThrow();
+        Instant originalCreatedAt = persisted.getCreatedAt();
+        Instant originalUpdatedAt = persisted.getUpdatedAt();
+
+        mockMvc.perform(put("/invoice/{id}", original.getId())
+                        .with(finance())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "invoice_number": "INV-CHANGED",
+                                  "supplier": "New supplier",
+                                  "purchase_request_number": "PR-2",
+                                  "invoice_sum_paid": 25.00,
+                                  "invoice_status": "created"
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
+
+        Invoice unchanged = invoices.findById(original.getId()).orElseThrow();
+        assertThat(unchanged.getId()).isEqualTo(original.getId());
+        assertThat(unchanged.getInvoiceNumber()).isEqualTo("INV-1");
+        assertThat(unchanged.getSupplier()).isEqualTo("Old supplier");
+        assertThat(unchanged.getPurchaseRequestNumber()).isEqualTo("PR-1");
+        assertThat(unchanged.getPurchaseRequestValidatedAt()).isEqualTo(validatedAt);
+        assertThat(unchanged.getInvoiceSum()).isEqualByComparingTo("100.00");
+        assertThat(unchanged.getInvoiceSumPaid()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(unchanged.getInvoiceStatus()).isEqualTo("created");
+        assertThat(unchanged.getAttachmentFilename()).isNull();
+        assertThat(unchanged.getAttachmentContentType()).isNull();
+        assertThat(unchanged.getAttachmentBytes()).isNull();
+        assertThat(unchanged.getUploadedBy()).isEqualTo("finadmin");
+        assertThat(unchanged.getCreatedAt()).isEqualTo(originalCreatedAt);
+        assertThat(unchanged.getUpdatedAt()).isEqualTo(originalUpdatedAt);
+        verifyNoInteractions(purchaseRequests);
+    }
+
+    @Test
     void explicitSelectionOfSameLegacyCodeAddsProvenance() throws Exception {
         Invoice legacy = invoices.save(invoice("INV-1", "Atlassian", "PR-2", null));
         when(purchaseRequests.findByCode("PR-2"))
@@ -239,6 +398,8 @@ class InvoiceRelationshipIntegrationTests {
                 Instant.parse("2026-01-01T00:00:00Z")
         ));
         Invoice legacy = invoices.save(invoice("INV-LEGACY", "Supplier", "PR-2", null));
+        legacy.setInvoiceStatus("paid");
+        legacy = invoices.save(legacy);
 
         mockMvc.perform(put("/invoice/{id}", validated.getId())
                         .with(finance())
@@ -262,6 +423,10 @@ class InvoiceRelationshipIntegrationTests {
                 .isEqualTo("Updated legacy supplier");
         assertThat(invoices.findById(legacy.getId()).orElseThrow().getPurchaseRequestValidatedAt())
                 .isNull();
+        assertThat(invoices.findById(legacy.getId()).orElseThrow().getInvoiceSumPaid())
+                .isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(invoices.findById(legacy.getId()).orElseThrow().getInvoiceStatus())
+                .isEqualTo("paid");
         verifyNoInteractions(purchaseRequests);
     }
 
